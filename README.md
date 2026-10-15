@@ -1,40 +1,42 @@
-# SocialLite - Multi-User Group & 1-to-1 Messenger
+# SocialLite - Multi-User Group & 1-to-1 Messenger (SQLite3 Powered)
 
-A modern, high-performance desktop messaging application in Python. Supports **Multi-User Group Chat** where multiple users can connect to a group room simultaneously, with native support for global internet communication using Pinggy reverse tunnels (e.g., Host in Assam, multiple Members in Delhi, Mumbai, Kolkata).
-
----
-
-## ⚡ Instant Auto-Fetch Pinggy Feature
-
-- **Zero-Manual-Copying URL Auto-Fetch**:
-  - The Pinggy command includes `-L4300:localhost:4300`:
-    ```bash
-    ssh -p 443 -L4300:localhost:4300 -o StrictHostKeyChecking=no -o ServerAliveInterval=30 -R0:127.0.0.1:5001 tcp@a.pinggy.io
-    ```
-  - When you launch the tunnel and **enter your password in CMD**, SocialLite **automatically fetches the generated `tcp://...` URL** via the local API the instant the connection completes!
-  - It **automatically fills the Public Link box** in SocialLite.
-  - It **automatically copies the URL to your clipboard** ready to paste to friends!
+A modern, high-performance desktop messaging application in Python. Features built-in **User Registration & Login**, **1-to-1 Private Direct Messaging** between friends, and **Multi-User Group Chat**, backed by a zero-setup **SQLite3** database and global Pinggy SSH tunneling.
 
 ---
 
-## 👥 Group Messaging Features
+## ❓ Is SQLite3 Required to be Installed or Setup?
 
-- **Multi-Client Group Architecture**:
-  - The **Host (Group Admin)** creates the room.
-  - Any number of **Members** can join the group room simultaneously.
-  - Messages sent by any member are automatically **broadcast to all other members** in real-time.
-- **Dedicated Host Pinggy Input Box & UX**:
-  - **Launch Tunnel**: One-click launch with automated console.
-  - **Auto-Fetched Public Link Box**: A dedicated input box for the Host showing their public Pinggy link (`tcp://...`).
-  - **📋 Copy Link for Members**: One-click copy with instant confirmation.
-- **Live Members Sidebar**:
-  - Displays real-time active users (`👥 Members (3)`).
-  - Online presence indicators (`●`).
-  - Automatically updates when members join or leave.
-- **Distinct Sender Colors**:
-  - Each group member gets a unique, pleasant color tag so it's easy to follow group conversations.
-- **Join / Leave Announcements**:
-  - Centralized notification pills in the feed (`🎉 Bob joined the group!`, `👋 Charlie left the group.`).
+> **NO! Absolutely NO installation or setup is needed!**
+> 
+> Python comes with `sqlite3` **built directly into its standard library** (`import sqlite3`).
+> - No `pip install` required.
+> - No database server (like MySQL or PostgreSQL) to install or run.
+> - All accounts and messages are automatically created and saved in `social_lite.db` right inside the application directory!
+
+---
+
+## 🌟 Key Features
+
+1. **User Authentication (Registration & Login)**:
+   - Secure account creation with PBKDF2-HMAC-SHA256 salted password hashing.
+   - Clean login/register tabbed interface.
+   - User profile badge with one-click **Logout** button.
+
+2. **1-to-1 Direct Messaging & Group Chat**:
+   - **👥 Group Chat (`# General`)**: Broadcast message to all connected members in the room.
+   - **💬 1-to-1 Direct Messages**:
+     - The left sidebar displays all online friends / members.
+     - Click any friend's name to switch to a private, direct conversation with them!
+     - Direct messages are routed exclusively to that friend.
+     - Unread message counters (e.g. `(1)`) alert you when a friend sends you a private DM while you're in the group chat.
+
+3. **Persistent SQLite3 Message History**:
+   - Both Group chats and 1-to-1 conversations are automatically stored in `social_lite.db`.
+   - Switching between friends loads your full previous chat history instantly.
+
+4. **Global Internet Connection (Pinggy Reverse Tunnel)**:
+   - Connect across different networks and cities (Assam <-> Delhi) with 1 click.
+   - **Auto-fetch URL**: Enter your password in CMD, and SocialLite automatically grabs the `tcp://...` address, populates the input box, and copies it to your clipboard.
 
 ---
 
@@ -42,10 +44,12 @@ A modern, high-performance desktop messaging application in Python. Supports **M
 
 ```
 c:\python_software\social_lite\
-├── network.py       # Multi-client TCP socket server, broadcast & presence tracking
-├── tunnel.py        # Pinggy tunnel runner, debugger API client (4300) & parser
-├── gui.py           # Modern CustomTkinter GUI with auto-fetch & Members sidebar
+├── database.py      # SQLite3 user auth (PBKDF2) & chat history persistence (ZERO INSTALLATION)
+├── network.py       # TCP socket server, group broadcast & 1-to-1 private routing
+├── tunnel.py        # Pinggy SSH reverse tunnel runner & auto-fetch API client
+├── gui.py           # CustomTkinter GUI (Auth screen, Friends sidebar, 1-to-1 & Group chat)
 ├── main.py          # Application entry point
+├── social_lite.db   # Auto-created SQLite3 database file
 └── README.md        # Documentation
 ```
 
@@ -53,25 +57,17 @@ c:\python_software\social_lite\
 
 ## 🚀 How to Run
 
-Launch the application:
-```powershell
-cd c:\python_software\social_lite
-python main.py
-```
+1. Open PowerShell or Terminal:
+   ```powershell
+   cd c:\python_software\social_lite
+   python main.py
+   ```
 
----
-
-## 🌐 Assam to Delhi (Global Group Workflow)
-
-### 1. Host (Assam)
-1. Set Role: **Host (Group Admin)** (Port `5001`).
-2. Click **Start Group**.
-3. Click **🚀 Launch Tunnel** (or run the command shown in the purple panel).
-4. Enter your password in CMD when prompted.
-5. **Boom!** The app **automatically fetches the URL** into the **Public Link for Members** box and copies it to your clipboard.
-6. Send the link to your friends!
-
-### 2. Members (Delhi, Mumbai, etc.)
-1. Set Role: **Connect (Join Group)**.
-2. In **Target Host**, click **📋 Paste from Clipboard** (or paste the `tcp://...` address).
-3. Click **Join Group**!
+2. **First Time**: Go to the **Register** tab, enter a username and password, and click **Create Account**.
+3. **Log In**: Switch to the **Login** tab and log into your account.
+4. **Choose Role**:
+   - **Host (Group Admin)**: Click **Start Group** to create a chat room (and launch Pinggy tunnel if across internet).
+   - **Connect (Join Group)**: Enter the Host's IP / Pinggy link and click **Join Group**.
+5. **Chat**:
+   - Stay in **👥 # General** for group messaging.
+   - Click any friend's name in the left sidebar under **DIRECT MESSAGES** to chat 1-to-1 privately!
