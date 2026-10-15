@@ -58,6 +58,7 @@ def init_db():
         file_name TEXT DEFAULT '',
         file_size INTEGER DEFAULT 0,
         file_path TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'sent',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -77,6 +78,8 @@ def init_db():
         cursor.execute("ALTER TABLE messages ADD COLUMN file_size INTEGER DEFAULT 0;")
     if "file_path" not in existing_cols:
         cursor.execute("ALTER TABLE messages ADD COLUMN file_path TEXT DEFAULT '';")
+    if "status" not in existing_cols:
+        cursor.execute("ALTER TABLE messages ADD COLUMN status TEXT NOT NULL DEFAULT 'sent';")
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_owner ON messages(owner_user, chat_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unique ON messages(owner_user, msg_id);")
@@ -175,7 +178,8 @@ def get_canonical_chat_id(sender: str, recipient: str) -> str:
 def save_message(owner_user: str, sender: str, recipient: str, text: str,
                  timestamp: str = None, msg_id: str = None,
                  msg_type: str = "text", file_name: str = "",
-                 file_size: int = 0, file_path: str = "") -> int:
+                 file_size: int = 0, file_path: str = "",
+                 status: str = "sent") -> int:
     """
     Save a chat or file message to the database, scoped to owner_user and deduplicated by msg_id.
     Prevents duplicate message insertion.
@@ -194,7 +198,7 @@ def save_message(owner_user: str, sender: str, recipient: str, text: str,
     try:
         # Check if this owner already has this msg_id stored
         cursor.execute(
-            "SELECT id FROM messages WHERE owner_user = ? AND msg_id = ?",
+            "SELECT id, status FROM messages WHERE owner_user = ? AND msg_id = ?",
             (owner, msg_id)
         )
         existing = cursor.fetchone()
@@ -204,10 +208,10 @@ def save_message(owner_user: str, sender: str, recipient: str, text: str,
 
         cursor.execute(
             """
-            INSERT INTO messages (msg_id, owner_user, chat_id, sender, recipient, text, timestamp, msg_type, file_name, file_size, file_path)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (msg_id, owner_user, chat_id, sender, recipient, text, timestamp, msg_type, file_name, file_size, file_path, status)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (msg_id, owner, chat_id, sender.strip(), recipient.strip(), text.strip(), timestamp, msg_type, file_name, file_size, file_path)
+            (msg_id, owner, chat_id, sender.strip(), recipient.strip(), text.strip(), timestamp, msg_type, file_name, file_size, file_path, status)
         )
         conn.commit()
         return cursor.lastrowid
@@ -228,7 +232,7 @@ def get_chat_history(owner_user: str, user2_or_group: str, limit: int = 250) -> 
     try:
         cursor.execute(
             """
-            SELECT id, msg_id, sender, recipient, text, timestamp, msg_type, file_name, file_size, file_path, created_at
+            SELECT id, msg_id, sender, recipient, text, timestamp, msg_type, file_name, file_size, file_path, status, created_at
             FROM messages
             WHERE (owner_user = ? OR owner_user = '') AND chat_id = ?
             ORDER BY id ASC
@@ -254,11 +258,88 @@ def get_chat_history(owner_user: str, user2_or_group: str, limit: int = 250) -> 
                     "msg_type": r["msg_type"] if "msg_type" in r.keys() else "text",
                     "file_name": r["file_name"] if "file_name" in r.keys() else "",
                     "file_size": r["file_size"] if "file_size" in r.keys() else 0,
-                    "file_path": r["file_path"] if "file_path" in r.keys() else ""
+                    "file_path": r["file_path"] if "file_path" in r.keys() else "",
+                    "status": r["status"] if "status" in r.keys() and r["status"] else "sent"
                 })
         return result
     except Exception as e:
         print(f"[DB Error] Failed to load messages: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def update_message_status(msg_id: str, new_status: str, owner_user: str = None) -> bool:
+    """Update message status (e.g. 'sent' -> 'delivered' -> 'read').
+    Never downgrades a 'read' message back to 'delivered' or 'sent'.
+    """
+    mid = (msg_id or "").strip()
+    if not mid:
+        return False
+
+    status_ranks = {"sent": 1, "delivered": 2, "read": 3}
+    target_rank = status_ranks.get(new_status, 1)
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        if owner_user:
+            cursor.execute(
+                "SELECT id, status FROM messages WHERE msg_id = ? AND owner_user = ?",
+                (mid, owner_user.strip())
+            )
+        else:
+            cursor.execute(
+                "SELECT id, status FROM messages WHERE msg_id = ?",
+                (mid,)
+            )
+        rows = cursor.fetchall()
+        for r in rows:
+            curr_status = r["status"] or "sent"
+            curr_rank = status_ranks.get(curr_status, 1)
+            if target_rank > curr_rank:
+                cursor.execute(
+                    "UPDATE messages SET status = ? WHERE id = ?",
+                    (new_status, r["id"])
+                )
+        conn.commit()
+        return True
+    except Exception as e:
+        print(f"[DB Error] Failed to update message status: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def update_messages_status_bulk(msg_ids: list[str], new_status: str, owner_user: str = None) -> bool:
+    """Bulk update multiple message IDs to new_status."""
+    if not msg_ids:
+        return True
+    for mid in msg_ids:
+        update_message_status(mid, new_status, owner_user)
+    return True
+
+
+def get_unread_incoming_msg_ids(owner_user: str, sender: str) -> list[str]:
+    """Get all message IDs sent by 'sender' to 'owner_user' that are not yet marked as 'read'."""
+    owner = (owner_user or "").strip()
+    snd = (sender or "").strip()
+    if not owner or not snd:
+        return []
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT msg_id FROM messages
+            WHERE owner_user = ? AND sender = ? AND (status IS NULL OR status != 'read')
+            """,
+            (owner, snd)
+        )
+        return [r["msg_id"] for r in cursor.fetchall() if r["msg_id"]]
+    except Exception as e:
+        print(f"[DB Error] Failed to get unread msg ids: {e}")
         return []
     finally:
         conn.close()

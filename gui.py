@@ -103,6 +103,21 @@ def get_sender_color(sender: str) -> str:
     return MEMBER_COLORS[idx]
 
 
+def get_tick_display(status: str) -> tuple[str, str]:
+    """Return the tick symbol and color for a message status.
+    - White tick: Single '✓' in #f8fafc (Sent to network)
+    - Green/Grey tick: Double '✓✓' in #10b981 (Delivered to peer)
+    - Blue tick: Double '✓✓' in #38bdf8 (Read / Seen by peer)
+    """
+    s = (status or "").lower()
+    if s == "read":
+        return "✓✓", "#38bdf8"    # Double Blue tick
+    elif s == "delivered":
+        return "✓✓", "#10b981"    # Double Green/Grey tick
+    else:
+        return "✓", "#f8fafc"     # Single White tick
+
+
 class SocialLiteGUI:
     def __init__(self, root: ctk.CTk):
         self.root = root
@@ -123,6 +138,7 @@ class SocialLiteGUI:
         self.attach_btn = None
         self.file_preview_frame = None
         self.message_widgets = {}  # {msg_id: bubble_row_frame} for live deletion
+        self.message_ticks = {}    # {msg_id: tick_label_widget} for live status updates
 
         # Networking & Tunnel Managers
         self.event_queue = queue.Queue()
@@ -761,6 +777,18 @@ class SocialLiteGUI:
             self.chat_subtitle_lbl.configure(text=f"Private 1-to-1 conversation with {target}")
             self.msg_entry.configure(placeholder_text=f"Message {target} privately...")
 
+        # Send read receipts for unread incoming messages from this friend
+        if target != "group" and self.current_user:
+            unread_ids = database.get_unread_incoming_msg_ids(self.current_user, target)
+            if unread_ids:
+                database.update_messages_status_bulk(unread_ids, "read", owner_user=self.current_user)
+                self.network.send_message({
+                    "type": "msg_read",
+                    "msg_ids": unread_ids,
+                    "sender": self.current_user,
+                    "recipient": target
+                })
+
         self._render_friends_list()
         self._load_active_chat_history()
 
@@ -769,6 +797,7 @@ class SocialLiteGUI:
         for child in self.chat_scroll.winfo_children():
             child.destroy()
         self.message_widgets.clear()
+        self.message_ticks.clear()
 
         if not self.current_user:
             return
@@ -789,6 +818,7 @@ class SocialLiteGUI:
 
                 is_sent = (m["sender"].strip().lower() == self.current_user.strip().lower())
                 m_type = m.get("msg_type", "text")
+                m_status = m.get("status", "sent")
                 if m_type == "file":
                     self._render_file_bubble(
                         sender="You" if is_sent else m["sender"],
@@ -798,7 +828,8 @@ class SocialLiteGUI:
                         file_name=m.get("file_name", "file"),
                         file_size=m.get("file_size", 0),
                         file_path=m.get("file_path", ""),
-                        msg_id=mid
+                        msg_id=mid,
+                        status=m_status
                     )
                 else:
                     self._render_bubble(
@@ -806,7 +837,8 @@ class SocialLiteGUI:
                         text=m["text"],
                         timestamp=m["timestamp"],
                         is_sent=is_sent,
-                        msg_id=mid
+                        msg_id=mid,
+                        status=m_status
                     )
 
     def _render_friends_list(self):
@@ -1248,7 +1280,7 @@ class SocialLiteGUI:
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _render_file_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, file_name: str, file_size: int, file_path: str, msg_id: str = None):
+    def _render_file_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, file_name: str, file_size: int, file_path: str, msg_id: str = None, status: str = "sent"):
         """Render modern file attachment card in active chat feed."""
         bubble_row = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         bubble_row.pack(fill="x", pady=5, padx=6)
@@ -1271,8 +1303,19 @@ class SocialLiteGUI:
         header_row.pack(anchor=align, padx=14, pady=(8, 2))
 
         if is_sent:
+            tick_text, tick_color = get_tick_display(status)
+            tick_lbl = ctk.CTkLabel(
+                header_row,
+                text=tick_text,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=tick_color
+            )
+            tick_lbl.pack(side="right", padx=(2, 0))
+            if msg_id:
+                self.message_ticks[msg_id] = tick_lbl
+
             time_lbl = ctk.CTkLabel(header_row, text=f"{timestamp}  •  You", font=ctk.CTkFont(size=10, weight="bold"), text_color="#93c5fd")
-            time_lbl.pack(side="right")
+            time_lbl.pack(side="right", padx=(0, 2))
         else:
             sender_color = get_sender_color(sender)
             sender_lbl = ctk.CTkLabel(header_row, text=sender, font=ctk.CTkFont(size=11, weight="bold"), text_color=sender_color)
@@ -1434,7 +1477,7 @@ class SocialLiteGUI:
             except Exception as e:
                 messagebox.showerror("Save Failed", f"Could not save file: {e}")
 
-    def _render_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, msg_id: str = None):
+    def _render_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, msg_id: str = None, status: str = "sent"):
         """Render modern message card in active chat feed."""
         bubble_row = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         bubble_row.pack(fill="x", pady=4, padx=6)
@@ -1457,8 +1500,19 @@ class SocialLiteGUI:
         header_row.pack(anchor=align, padx=14, pady=(8, 2))
 
         if is_sent:
+            tick_text, tick_color = get_tick_display(status)
+            tick_lbl = ctk.CTkLabel(
+                header_row,
+                text=tick_text,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                text_color=tick_color
+            )
+            tick_lbl.pack(side="right", padx=(2, 0))
+            if msg_id:
+                self.message_ticks[msg_id] = tick_lbl
+
             time_lbl = ctk.CTkLabel(header_row, text=f"{timestamp}  •  You", font=ctk.CTkFont(size=10, weight="bold"), text_color="#93c5fd")
-            time_lbl.pack(side="right")
+            time_lbl.pack(side="right", padx=(0, 2))
         else:
             sender_color = get_sender_color(sender)
             sender_lbl = ctk.CTkLabel(header_row, text=sender, font=ctk.CTkFont(size=11, weight="bold"), text_color=sender_color)
@@ -1498,6 +1552,13 @@ class SocialLiteGUI:
             self.chat_scroll._parent_canvas.yview_moveto(1.0)
         except Exception:
             pass
+
+    def _update_tick_ui(self, msg_id: str, new_status: str):
+        """Dynamically update tick icon and color for a message in the active chat view."""
+        tick_lbl = self.message_ticks.get(msg_id)
+        if tick_lbl and tick_lbl.winfo_exists():
+            tick_text, tick_color = get_tick_display(new_status)
+            tick_lbl.configure(text=tick_text, text_color=tick_color)
 
     def _add_system_message(self, text: str):
         """Render centered system notification pill in feed."""
@@ -1687,7 +1748,24 @@ class SocialLiteGUI:
                                 if self.active_chat.lower() == sender.lower():
                                     is_for_active_chat = True
 
+                            # Send delivery acknowledgment back to sender so sender gets Double Green/Grey tick!
+                            self.network.send_message({
+                                "type": "msg_delivered",
+                                "msg_id": msg_id,
+                                "sender": self.current_user or "Me",
+                                "recipient": sender
+                            })
+
                             if is_for_active_chat:
+                                # Receiver is actively reading the chat right now!
+                                # Send read receipt back to sender so sender gets Double Blue tick!
+                                self.network.send_message({
+                                    "type": "msg_read",
+                                    "msg_id": msg_id,
+                                    "sender": self.current_user or "Me",
+                                    "recipient": sender
+                                })
+                                database.update_message_status(msg_id, "read", owner_user=self.current_user)
                                 self._render_bubble(sender=sender, text=text, timestamp=timestamp, is_sent=False, msg_id=msg_id)
                             else:
                                 # Increment unread counter and update sidebar
@@ -1759,6 +1837,14 @@ class SocialLiteGUI:
                                 file_path=dest_path
                             )
 
+                            # Send delivery acknowledgment back to sender
+                            self.network.send_message({
+                                "type": "msg_delivered",
+                                "msg_id": msg_id,
+                                "sender": self.current_user or "Me",
+                                "recipient": sender
+                            })
+
                             # Determine if belongs to active chat
                             is_for_active_chat = False
                             if recipient == "group" and self.active_chat == "group":
@@ -1768,6 +1854,13 @@ class SocialLiteGUI:
                                     is_for_active_chat = True
 
                             if is_for_active_chat:
+                                self.network.send_message({
+                                    "type": "msg_read",
+                                    "msg_id": msg_id,
+                                    "sender": self.current_user or "Me",
+                                    "recipient": sender
+                                })
+                                database.update_message_status(msg_id, "read", owner_user=self.current_user)
                                 self._render_file_bubble(
                                     sender=sender,
                                     text=text,
@@ -1782,6 +1875,19 @@ class SocialLiteGUI:
                                 key = "group" if recipient == "group" else sender
                                 self.unread_counts[key] = self.unread_counts.get(key, 0) + 1
                                 self._render_friends_list()
+
+                        elif m_type == "msg_delivered":
+                            del_id = data.get("msg_id")
+                            if del_id:
+                                database.update_message_status(del_id, "delivered")
+                                self._update_tick_ui(del_id, "delivered")
+
+                        elif m_type == "msg_read":
+                            read_id = data.get("msg_id")
+                            read_ids = data.get("msg_ids") or ([read_id] if read_id else [])
+                            for r_id in read_ids:
+                                database.update_message_status(r_id, "read")
+                                self._update_tick_ui(r_id, "read")
 
                         elif m_type == "delete_message":
                             del_msg_id = data.get("msg_id")

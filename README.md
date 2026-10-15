@@ -43,12 +43,19 @@ A modern, high-performance desktop messaging application in Python. Features bui
      - **Delete for Me**: Permanently deletes the message or file record only from your local view and your private SQLite database record. Other users keep their copies intact.
      - **Delete for Everyone**: (Available for messages you sent) Deletes the message locally and broadcasts a real-time deletion signal across the network, automatically wiping the message from all recipients' screens and databases, **and physically deleting the downloaded file from social_lite/downloads/ on recipients' PCs**.
 
-5. **Persistent SQLite3 Message & File History**:
+5. **✓ / ✓✓ Message Status Ticks (White, Green/Grey, and Blue)**:
+   - Real-time delivery and read receipt indicators displayed on every sent message and file bubble:
+     - **Single White Tick (✓)**: **Sent** (successfully dispatched from your device to the socket network).
+     - **Double Green/Grey Tick (✓✓)**: **Delivered** (delivered to the recipient's device and stored in their local database).
+     - **Double Blue Tick (✓✓)**: **Read / Seen** (the recipient opened the conversation and viewed your message).
+   - Dynamically transitions in real time without refreshing or reloading the chat.
+
+6. **Persistent SQLite3 Message & File History**:
    - Both Group chats and 1-to-1 conversations (texts and file attachments) are automatically stored in `social_lite.db`.
    - Switching between friends loads your full previous chat history instantly.
    - Offline past contacts are listed in the sidebar so you can review previous conversations and shared files anytime.
 
-6. **Global Internet Connection (Pinggy Reverse Tunnel)**:
+7. **Global Internet Connection (Pinggy Reverse Tunnel)**:
    - Connect across different networks and cities (Assam <-> Delhi) with 1 click.
    - **Auto-fetch URL**: Enter your password in CMD, and SocialLite automatically grabs the `tcp://...` address, populates the input box, and copies it to your clipboard.
 

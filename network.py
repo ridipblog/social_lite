@@ -170,7 +170,7 @@ class NetworkManager:
                     })
                     self._host_broadcast_user_list()
 
-                elif m_type in ("chat", "file", "delete_message"):
+                elif m_type in ("chat", "file", "delete_message", "msg_delivered", "msg_read"):
                     recipient = msg.get("recipient", "group")
 
                     if recipient == "group":
@@ -324,7 +324,7 @@ class NetworkManager:
             m_type = msg.get("type")
             if m_type == "heartbeat":
                 continue
-            elif m_type in ("chat", "file", "delete_message"):
+            elif m_type in ("chat", "file", "delete_message", "msg_delivered", "msg_read"):
                 if self.on_message:
                     self.on_message(msg)
             elif m_type == "system":
