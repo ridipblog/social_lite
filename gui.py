@@ -25,7 +25,7 @@ from network import NetworkManager, get_local_ip
 from tunnel import PinggyTunnelManager, get_pinggy_command, parse_connection_target, is_ssh_available, fetch_pinggy_url
 
 # Dedicated directory for downloaded/shared files
-DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+DOWNLOADS_DIR = database.DOWNLOADS_DIR
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 # Appearance settings

@@ -10,14 +10,21 @@ Handles:
 
 import sqlite3
 import os
+import sys
 import hashlib
 import hmac
 import secrets
 import uuid
 from datetime import datetime
 
-DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "social_lite.db")
-DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+# Determine base directory: works for both Python script and PyInstaller .exe
+if getattr(sys, "frozen", False):
+    APP_DIR = os.path.dirname(os.path.abspath(sys.executable))
+else:
+    APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
+DB_FILE = os.path.join(APP_DIR, "social_lite.db")
+DOWNLOADS_DIR = os.path.join(APP_DIR, "downloads")
 
 
 def get_connection():

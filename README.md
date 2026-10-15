@@ -76,6 +76,17 @@ c:\python_software\social_lite\
 
 ---
 
+## 📦 Standalone Executable & Batch Builder (Send to Friends!)
+
+You can compile SocialLite into a single standalone `.exe` at any time with one click:
+- **Double-click `build_exe.bat`**: Automatically checks requirements, installs PyInstaller/CustomTkinter if missing, compiles `SocialLite.exe`, and packages it into `SocialLite.zip`.
+- **Output Executable**: `c:\python_software\social_lite\dist\SocialLite.exe`
+- **Shareable ZIP archive**: `c:\python_software\social_lite\dist\SocialLite.zip` (ideal for sending via Telegram, WhatsApp, Google Drive, or Gmail)
+
+Your friend just needs to double-click `SocialLite.exe` to launch the application immediately — **no Python or installation required**!
+
+---
+
 ## 🚀 How to Run
 
 1. Open PowerShell or Terminal:
