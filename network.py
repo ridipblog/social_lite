@@ -170,7 +170,7 @@ class NetworkManager:
                     })
                     self._host_broadcast_user_list()
 
-                elif m_type == "chat":
+                elif m_type in ("chat", "file"):
                     recipient = msg.get("recipient", "group")
 
                     if recipient == "group":
@@ -324,7 +324,7 @@ class NetworkManager:
             m_type = msg.get("type")
             if m_type == "heartbeat":
                 continue
-            elif m_type == "chat":
+            elif m_type in ("chat", "file"):
                 if self.on_message:
                     self.on_message(msg)
             elif m_type == "system":
@@ -391,7 +391,8 @@ class NetworkManager:
         """Helper to receive exact number of bytes from a socket."""
         buffer = bytearray()
         while len(buffer) < num_bytes:
-            packet = sock.recv(num_bytes - len(buffer))
+            chunk = min(65536, num_bytes - len(buffer))
+            packet = sock.recv(chunk)
             if not packet:
                 return None
             buffer.extend(packet)

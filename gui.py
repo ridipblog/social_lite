@@ -8,8 +8,12 @@ Features:
 - Pinggy SSH reverse tunnel integration with automatic URL fetching for cross-network connectivity
 """
 
+import os
+import shutil
+import base64
+import threading
 import customtkinter as ctk
-from tkinter import messagebox
+from tkinter import messagebox, filedialog
 import queue
 import time
 import hashlib
@@ -19,6 +23,10 @@ from datetime import datetime
 import database
 from network import NetworkManager, get_local_ip
 from tunnel import PinggyTunnelManager, get_pinggy_command, parse_connection_target, is_ssh_available, fetch_pinggy_url
+
+# Dedicated directory for downloaded/shared files
+DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
+os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 
 # Appearance settings
 ctk.set_appearance_mode("dark")
@@ -39,6 +47,42 @@ COLOR_RED = "#ef4444"          # Offline / error indicator
 COLOR_PURPLE = "#7c3aed"       # Pinggy tunnel purple
 COLOR_PURPLE_HOVER = "#6d28d9"
 COLOR_SIDEBAR_ACTIVE = "#2563eb"
+
+# File icon mapping
+def get_file_icon(filename: str) -> str:
+    ext = os.path.splitext(filename)[1].lower()
+    if ext in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico", ".svg"]:
+        return "🖼️"
+    elif ext in [".pdf"]:
+        return "📕"
+    elif ext in [".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"]:
+        return "📦"
+    elif ext in [".mp3", ".wav", ".ogg", ".flac", ".m4a", ".aac"]:
+        return "🎵"
+    elif ext in [".mp4", ".mkv", ".avi", ".mov", ".wmv", ".webm"]:
+        return "🎬"
+    elif ext in [".py", ".js", ".ts", ".html", ".css", ".json", ".cpp", ".c", ".java", ".sql"]:
+        return "💻"
+    elif ext in [".doc", ".docx", ".odt", ".rtf"]:
+        return "📝"
+    elif ext in [".xls", ".xlsx", ".csv"]:
+        return "📊"
+    elif ext in [".ppt", ".pptx"]:
+        return "📑"
+    elif ext in [".txt", ".md", ".log"]:
+        return "📄"
+    elif ext in [".exe", ".msi", ".bat", ".cmd", ".sh"]:
+        return "⚙️"
+    else:
+        return "📎"
+
+def format_file_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes} B"
+    elif size_bytes < 1024 * 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    else:
+        return f"{size_bytes / (1024 * 1024):.1f} MB"
 
 # Distinct avatar colors for different group members
 MEMBER_COLORS = [
@@ -75,6 +119,9 @@ class SocialLiteGUI:
         self.unread_counts = {}  # {chat_id: int}
         self.seen_msg_ids = set()  # Deduplication registry
         self._is_sending = False  # Debounce lock to prevent double-sends
+        self.pending_file = None  # Selected file attachment: {"path": str, "name": str, "size": int}
+        self.attach_btn = None
+        self.file_preview_frame = None
 
         # Networking & Tunnel Managers
         self.event_queue = queue.Queue()
@@ -576,26 +623,62 @@ class SocialLiteGUI:
         )
         self.chat_scroll.pack(fill="both", expand=True, padx=10, pady=2)
 
+        # File Attachment Preview Banner (Above input_row, hidden until file selected)
+        self.file_preview_frame = ctk.CTkFrame(chat_box, fg_color="#1e293b", corner_radius=8, height=36)
+        self.file_preview_lbl = ctk.CTkLabel(
+            self.file_preview_frame,
+            text="",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#38bdf8"
+        )
+        self.file_preview_lbl.pack(side="left", padx=12, pady=5)
+        self.file_remove_btn = ctk.CTkButton(
+            self.file_preview_frame,
+            text="✕ Cancel",
+            command=self._cancel_attached_file,
+            width=70,
+            height=26,
+            corner_radius=6,
+            fg_color="#334155",
+            hover_color="#ef4444",
+            font=ctk.CTkFont(size=11, weight="bold")
+        )
+        self.file_remove_btn.pack(side="right", padx=8, pady=5)
+
         # Bottom Input Area
-        input_row = ctk.CTkFrame(chat_box, fg_color="transparent")
-        input_row.pack(fill="x", padx=10, pady=(6, 10))
+        self.input_row = ctk.CTkFrame(chat_box, fg_color="transparent")
+        self.input_row.pack(fill="x", padx=10, pady=(6, 10))
+
+        self.attach_btn = ctk.CTkButton(
+            self.input_row,
+            text="📎 File",
+            command=self._on_attach_file_clicked,
+            width=70,
+            height=40,
+            corner_radius=10,
+            fg_color="#334155",
+            hover_color="#475569",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.attach_btn.pack(side="left", padx=(0, 8))
+        self.attach_btn.configure(state="disabled")
 
         self.msg_entry = ctk.CTkEntry(
-            input_row,
+            self.input_row,
             placeholder_text="Start or join a group to start messaging...",
             height=40,
             corner_radius=10,
             font=ctk.CTkFont(size=12)
         )
-        self.msg_entry.pack(side="left", fill="x", expand=True, padx=(0, 10))
+        self.msg_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.msg_entry.bind("<Return>", self._on_return_pressed)
         self.msg_entry.configure(state="disabled")
 
         self.send_btn = ctk.CTkButton(
-            input_row,
+            self.input_row,
             text="Send ➤",
             command=self._send_message,
-            width=90,
+            width=88,
             height=40,
             corner_radius=10,
             font=ctk.CTkFont(weight="bold")
@@ -606,6 +689,49 @@ class SocialLiteGUI:
         # Initial Setup
         self._update_mode_ui()
         self._load_active_chat_history()
+
+    def _on_attach_file_clicked(self):
+        """Open file dialog to attach and share any file in group or 1-to-1."""
+        if not (self.network.is_connected or self.network.is_listening):
+            messagebox.showinfo("Offline", "Please start or join a group room to share files.")
+            return
+
+        file_path = filedialog.askopenfilename(title="Select File to Share")
+        if not file_path:
+            return
+
+        file_size = os.path.getsize(file_path)
+        if file_size > 40 * 1024 * 1024:
+            messagebox.showwarning(
+                "File Too Large",
+                "Please choose a file smaller than 40 MB for fast network transfer."
+            )
+            return
+
+        file_name = os.path.basename(file_path)
+        self.pending_file = {
+            "path": file_path,
+            "name": file_name,
+            "size": file_size
+        }
+
+        icon = get_file_icon(file_name)
+        size_str = format_file_size(file_size)
+        self.file_preview_lbl.configure(text=f"{icon}  Attached: {file_name}  ({size_str})")
+        self.file_preview_frame.pack(fill="x", padx=10, pady=(0, 6), before=self.input_row)
+        self.msg_entry.configure(placeholder_text="Add an optional caption, then click Send ➤...")
+        self.msg_entry.focus()
+
+    def _cancel_attached_file(self):
+        """Remove pending file attachment and hide preview chip."""
+        self.pending_file = None
+        if hasattr(self, "file_preview_frame") and self.file_preview_frame:
+            self.file_preview_frame.pack_forget()
+        if hasattr(self, "msg_entry") and self.msg_entry:
+            if self.active_chat == "group":
+                self.msg_entry.configure(placeholder_text="Message # General (Group)...")
+            else:
+                self.msg_entry.configure(placeholder_text=f"Message {self.active_chat} privately...")
 
     def _on_return_pressed(self, event=None):
         """Prevent event bubbling and call _send_message once cleanly."""
@@ -620,6 +746,7 @@ class SocialLiteGUI:
         self.active_chat = target
         # Clear unread counter for this conversation
         self.unread_counts[target] = 0
+        self._cancel_attached_file()
 
         # Update UI Header & Input Placeholder
         if target == "group":
@@ -659,12 +786,24 @@ class SocialLiteGUI:
                     self.seen_msg_ids.add(mid)
 
                 is_sent = (m["sender"].strip().lower() == self.current_user.strip().lower())
-                self._render_bubble(
-                    sender="You" if is_sent else m["sender"],
-                    text=m["text"],
-                    timestamp=m["timestamp"],
-                    is_sent=is_sent
-                )
+                m_type = m.get("msg_type", "text")
+                if m_type == "file":
+                    self._render_file_bubble(
+                        sender="You" if is_sent else m["sender"],
+                        text=m["text"],
+                        timestamp=m["timestamp"],
+                        is_sent=is_sent,
+                        file_name=m.get("file_name", "file"),
+                        file_size=m.get("file_size", 0),
+                        file_path=m.get("file_path", "")
+                    )
+                else:
+                    self._render_bubble(
+                        sender="You" if is_sent else m["sender"],
+                        text=m["text"],
+                        timestamp=m["timestamp"],
+                        is_sent=is_sent
+                    )
 
     def _render_friends_list(self):
         """Update the Direct Messages sidebar list with all online friends and past contacts."""
@@ -938,6 +1077,8 @@ class SocialLiteGUI:
                 self._disable_inputs()
                 self.msg_entry.configure(state="normal")
                 self.send_btn.configure(state="normal")
+                if hasattr(self, "attach_btn") and self.attach_btn:
+                    self.attach_btn.configure(state="normal")
                 self.msg_entry.focus()
                 self._add_system_message(f"👑 Room started by {my_name}! Ready for friends to join.")
             else:
@@ -963,6 +1104,8 @@ class SocialLiteGUI:
         self.action_btn.configure(text="Leave Group", fg_color=COLOR_RED, hover_color="#dc2626")
         self.msg_entry.configure(state="normal")
         self.send_btn.configure(state="normal")
+        if hasattr(self, "attach_btn") and self.attach_btn:
+            self.attach_btn.configure(state="normal")
         self.msg_entry.focus()
         self._add_system_message("🎉 Connected to the room! You can chat in Group or pick a friend for 1-to-1.")
 
@@ -972,6 +1115,9 @@ class SocialLiteGUI:
         self.msg_entry.delete(0, "end")
         self.msg_entry.configure(state="disabled", placeholder_text="Start or join a group to start messaging...")
         self.send_btn.configure(state="disabled")
+        if hasattr(self, "attach_btn") and self.attach_btn:
+            self.attach_btn.configure(state="disabled")
+        self._cancel_attached_file()
         self.online_users = []
         self._render_friends_list()
 
@@ -984,7 +1130,9 @@ class SocialLiteGUI:
         self._is_sending = True
         try:
             text = self.msg_entry.get().strip()
-            if not text:
+            pending = self.pending_file
+
+            if not text and not pending:
                 return
 
             if not (self.network.is_connected or self.network.is_listening):
@@ -995,37 +1143,257 @@ class SocialLiteGUI:
             recipient = self.active_chat  # 'group' or friend's username
             msg_id = uuid.uuid4().hex
 
-            payload = {
-                "type": "chat",
-                "msg_id": msg_id,
-                "sender": sender,
-                "recipient": recipient,
-                "text": text,
-                "timestamp": timestamp
-            }
-
-            # Register locally generated msg_id so this client never processes it as duplicate
-            self.seen_msg_ids.add(msg_id)
-
-            # 1. Send over socket network
-            if self.network.send_message(payload):
-                # 2. Save to SQLite3 database scoped to sender (self.current_user)!
-                database.save_message(
-                    owner_user=sender,
-                    sender=sender,
-                    recipient=recipient,
-                    text=text,
-                    timestamp=timestamp,
-                    msg_id=msg_id
-                )
-
-                # 3. Render immediately on screen
-                self._render_bubble(sender="You", text=text, timestamp=timestamp, is_sent=True)
+            if pending:
+                # Send file attachment (with optional caption)
+                self._cancel_attached_file()
                 self.msg_entry.delete(0, "end")
+                self._send_file_message(pending, text, sender, recipient, timestamp, msg_id)
             else:
-                messagebox.showwarning("Send Failed", "Message could not be delivered.")
+                # Regular text chat
+                payload = {
+                    "type": "chat",
+                    "msg_id": msg_id,
+                    "sender": sender,
+                    "recipient": recipient,
+                    "text": text,
+                    "timestamp": timestamp
+                }
+
+                # Register locally generated msg_id so this client never processes it as duplicate
+                self.seen_msg_ids.add(msg_id)
+
+                # 1. Send over socket network
+                if self.network.send_message(payload):
+                    # 2. Save to SQLite3 database scoped to sender (self.current_user)!
+                    database.save_message(
+                        owner_user=sender,
+                        sender=sender,
+                        recipient=recipient,
+                        text=text,
+                        timestamp=timestamp,
+                        msg_id=msg_id,
+                        msg_type="text"
+                    )
+
+                    # 3. Render immediately on screen
+                    self._render_bubble(sender="You", text=text, timestamp=timestamp, is_sent=True)
+                    self.msg_entry.delete(0, "end")
+                else:
+                    messagebox.showwarning("Send Failed", "Message could not be delivered.")
         finally:
             self._is_sending = False
+
+    def _send_file_message(self, file_info: dict, caption: str, sender: str, recipient: str, timestamp: str, msg_id: str):
+        """Prepare, encode, save locally, and transmit file in background thread."""
+        file_path = file_info["path"]
+        file_name = file_info["name"]
+        file_size = file_info["size"]
+
+        # Ensure a copy exists in DOWNLOADS_DIR
+        local_dest = os.path.join(DOWNLOADS_DIR, file_name)
+        if os.path.abspath(file_path) != os.path.abspath(local_dest):
+            try:
+                shutil.copy2(file_path, local_dest)
+            except Exception:
+                local_dest = file_path
+
+        # 1. Register msg_id
+        self.seen_msg_ids.add(msg_id)
+
+        # 2. Save to database scoped to sender
+        database.save_message(
+            owner_user=sender,
+            sender=sender,
+            recipient=recipient,
+            text=caption,
+            timestamp=timestamp,
+            msg_id=msg_id,
+            msg_type="file",
+            file_name=file_name,
+            file_size=file_size,
+            file_path=local_dest
+        )
+
+        # 3. Render file bubble immediately on sender's feed
+        self._render_file_bubble(
+            sender="You",
+            text=caption,
+            timestamp=timestamp,
+            is_sent=True,
+            file_name=file_name,
+            file_size=file_size,
+            file_path=local_dest
+        )
+
+        # 4. Transmit over socket in background worker thread so GUI stays fluid
+        def _worker():
+            try:
+                with open(file_path, "rb") as f:
+                    file_bytes = f.read()
+                b64_str = base64.b64encode(file_bytes).decode("ascii")
+
+                payload = {
+                    "type": "file",
+                    "msg_id": msg_id,
+                    "sender": sender,
+                    "recipient": recipient,
+                    "text": caption,
+                    "filename": file_name,
+                    "file_size": file_size,
+                    "file_bytes_b64": b64_str,
+                    "timestamp": timestamp
+                }
+                ok = self.network.send_message(payload)
+                if not ok:
+                    self.event_queue.put(("error", f"Failed to deliver file '{file_name}'."))
+            except Exception as e:
+                self.event_queue.put(("error", f"File sending error: {e}"))
+
+        threading.Thread(target=_worker, daemon=True).start()
+
+    def _render_file_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, file_name: str, file_size: int, file_path: str):
+        """Render modern file attachment card in active chat feed."""
+        bubble_row = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
+        bubble_row.pack(fill="x", pady=5, padx=6)
+
+        bubble_color = COLOR_SENT if is_sent else COLOR_RECV
+        align = "e" if is_sent else "w"
+
+        bubble = ctk.CTkFrame(bubble_row, fg_color=bubble_color, corner_radius=14)
+        bubble.pack(side="right" if is_sent else "left", anchor=align, padx=4)
+
+        header_row = ctk.CTkFrame(bubble, fg_color="transparent")
+        header_row.pack(anchor=align, padx=14, pady=(8, 2))
+
+        if is_sent:
+            time_lbl = ctk.CTkLabel(header_row, text=f"{timestamp}  •  You", font=ctk.CTkFont(size=10, weight="bold"), text_color="#93c5fd")
+            time_lbl.pack(side="right")
+        else:
+            sender_color = get_sender_color(sender)
+            sender_lbl = ctk.CTkLabel(header_row, text=sender, font=ctk.CTkFont(size=11, weight="bold"), text_color=sender_color)
+            sender_lbl.pack(side="left", padx=(0, 6))
+
+            time_lbl = ctk.CTkLabel(header_row, text=f"•  {timestamp}", font=ctk.CTkFont(size=10), text_color=COLOR_TEXT_MUTED)
+            time_lbl.pack(side="left")
+
+        # Optional Caption Text
+        if text:
+            caption_lbl = ctk.CTkLabel(
+                bubble,
+                text=text,
+                font=ctk.CTkFont(size=13),
+                text_color="#ffffff" if is_sent else "#f1f5f9",
+                wraplength=480,
+                justify="right" if is_sent else "left"
+            )
+            caption_lbl.pack(anchor=align, padx=14, pady=(2, 6))
+
+        # Inner File Card Box
+        card_bg = "#0f172a" if is_sent else "#1e293b"
+        file_card = ctk.CTkFrame(bubble, fg_color=card_bg, corner_radius=10)
+        file_card.pack(anchor=align, padx=12, pady=(2, 10))
+
+        card_inner = ctk.CTkFrame(file_card, fg_color="transparent")
+        card_inner.pack(fill="x", padx=12, pady=8)
+
+        # File Icon
+        icon_lbl = ctk.CTkLabel(card_inner, text=get_file_icon(file_name), font=ctk.CTkFont(size=26))
+        icon_lbl.pack(side="left", padx=(0, 10))
+
+        # File Details
+        info_col = ctk.CTkFrame(card_inner, fg_color="transparent")
+        info_col.pack(side="left", fill="x", expand=True)
+
+        display_name = file_name
+        if len(display_name) > 30:
+            b, ext = os.path.splitext(display_name)
+            display_name = b[:24] + "..." + ext
+
+        fname_lbl = ctk.CTkLabel(
+            info_col,
+            text=display_name,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#ffffff"
+        )
+        fname_lbl.pack(anchor="w")
+
+        fsize_lbl = ctk.CTkLabel(
+            info_col,
+            text=format_file_size(file_size),
+            font=ctk.CTkFont(size=11),
+            text_color="#94a3b8"
+        )
+        fsize_lbl.pack(anchor="w")
+
+        # Action Buttons
+        btn_row = ctk.CTkFrame(file_card, fg_color="transparent")
+        btn_row.pack(fill="x", padx=12, pady=(0, 8))
+
+        open_btn = ctk.CTkButton(
+            btn_row,
+            text="📂 Open",
+            width=70,
+            height=28,
+            corner_radius=6,
+            fg_color="#3b82f6",
+            hover_color="#2563eb",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=lambda p=file_path: self._open_file(p)
+        )
+        open_btn.pack(side="left", padx=(0, 6))
+
+        save_btn = ctk.CTkButton(
+            btn_row,
+            text="💾 Save As...",
+            width=85,
+            height=28,
+            corner_radius=6,
+            fg_color="#334155",
+            hover_color="#475569",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            command=lambda p=file_path, n=file_name: self._save_file_as(p, n)
+        )
+        save_btn.pack(side="left")
+
+        # Auto-scroll to bottom
+        self.root.update_idletasks()
+        try:
+            self.chat_scroll._parent_canvas.yview_moveto(1.0)
+        except Exception:
+            pass
+
+    def _open_file(self, file_path: str):
+        """Open the file with default system application or reveal in folder."""
+        if not file_path or not os.path.exists(file_path):
+            messagebox.showinfo("File Not Found", "The file was not found on this computer.")
+            return
+        try:
+            os.startfile(file_path)
+        except Exception:
+            try:
+                import subprocess
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(file_path)])
+            except Exception as e:
+                messagebox.showerror("Open Error", f"Could not open file: {e}")
+
+    def _save_file_as(self, file_path: str, default_name: str):
+        """Prompt user to save a copy of the file anywhere on their computer."""
+        if not file_path or not os.path.exists(file_path):
+            messagebox.showinfo("File Not Found", "The original file is not available to copy.")
+            return
+
+        ext = os.path.splitext(default_name)[1]
+        save_target = filedialog.asksaveasfilename(
+            title="Save File As",
+            initialfile=default_name,
+            defaultextension=ext
+        )
+        if save_target:
+            try:
+                shutil.copy2(file_path, save_target)
+                messagebox.showinfo("Saved Successfully", f"File saved to:\n{save_target}")
+            except Exception as e:
+                messagebox.showerror("Save Failed", f"Could not save file: {e}")
 
     def _render_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool):
         """Render modern message card in active chat feed."""
@@ -1121,44 +1489,114 @@ class SocialLiteGUI:
                     self._on_connected_ui(data)
 
                 elif event_type == "message":
-                    if isinstance(data, dict) and data.get("type") == "chat":
-                        sender = data.get("sender", "Peer")
-                        recipient = data.get("recipient", "group")
-                        text = data.get("text", "")
-                        timestamp = data.get("timestamp", datetime.now().strftime("%I:%M %p"))
-                        msg_id = data.get("msg_id") or f"{sender}_{recipient}_{text}_{timestamp}"
+                    if isinstance(data, dict):
+                        m_type = data.get("type")
+                        if m_type == "chat":
+                            sender = data.get("sender", "Peer")
+                            recipient = data.get("recipient", "group")
+                            text = data.get("text", "")
+                            timestamp = data.get("timestamp", datetime.now().strftime("%I:%M %p"))
+                            msg_id = data.get("msg_id") or f"{sender}_{recipient}_{text}_{timestamp}"
 
-                        # Skip if this message was already received or processed (deduplication)
-                        if msg_id in self.seen_msg_ids:
-                            continue
-                        self.seen_msg_ids.add(msg_id)
+                            # Skip if this message was already received or processed (deduplication)
+                            if msg_id in self.seen_msg_ids:
+                                continue
+                            self.seen_msg_ids.add(msg_id)
 
-                        # Save to SQLite3 database scoped to this receiver (self.current_user)
-                        database.save_message(
-                            owner_user=self.current_user or "",
-                            sender=sender,
-                            recipient=recipient,
-                            text=text,
-                            timestamp=timestamp,
-                            msg_id=msg_id
-                        )
+                            # Save to SQLite3 database scoped to this receiver (self.current_user)
+                            database.save_message(
+                                owner_user=self.current_user or "",
+                                sender=sender,
+                                recipient=recipient,
+                                text=text,
+                                timestamp=timestamp,
+                                msg_id=msg_id,
+                                msg_type="text"
+                            )
 
-                        # Determine which chat this message belongs to
-                        is_for_active_chat = False
-                        if recipient == "group" and self.active_chat == "group":
-                            is_for_active_chat = True
-                        elif recipient != "group":
-                            # 1-to-1 message: check if we are currently viewing this friend's DM
-                            if self.active_chat.lower() == sender.lower():
+                            # Determine which chat this message belongs to
+                            is_for_active_chat = False
+                            if recipient == "group" and self.active_chat == "group":
                                 is_for_active_chat = True
+                            elif recipient != "group":
+                                # 1-to-1 message: check if we are currently viewing this friend's DM
+                                if self.active_chat.lower() == sender.lower():
+                                    is_for_active_chat = True
 
-                        if is_for_active_chat:
-                            self._render_bubble(sender=sender, text=text, timestamp=timestamp, is_sent=False)
-                        else:
-                            # Increment unread counter and update sidebar
-                            key = "group" if recipient == "group" else sender
-                            self.unread_counts[key] = self.unread_counts.get(key, 0) + 1
-                            self._render_friends_list()
+                            if is_for_active_chat:
+                                self._render_bubble(sender=sender, text=text, timestamp=timestamp, is_sent=False)
+                            else:
+                                # Increment unread counter and update sidebar
+                                key = "group" if recipient == "group" else sender
+                                self.unread_counts[key] = self.unread_counts.get(key, 0) + 1
+                                self._render_friends_list()
+
+                        elif m_type == "file":
+                            sender = data.get("sender", "Peer")
+                            recipient = data.get("recipient", "group")
+                            text = data.get("text", "")
+                            filename = data.get("filename", "received_file")
+                            file_size = data.get("file_size", 0)
+                            b64_str = data.get("file_bytes_b64", "")
+                            timestamp = data.get("timestamp", datetime.now().strftime("%I:%M %p"))
+                            msg_id = data.get("msg_id") or f"{sender}_{recipient}_{text}_{filename}_{timestamp}"
+
+                            if msg_id in self.seen_msg_ids:
+                                continue
+                            self.seen_msg_ids.add(msg_id)
+
+                            # Save incoming file bytes into DOWNLOADS_DIR
+                            safe_name = os.path.basename(filename) or "received_file"
+                            dest_path = os.path.join(DOWNLOADS_DIR, safe_name)
+                            base, ext = os.path.splitext(safe_name)
+                            counter = 1
+                            while os.path.exists(dest_path):
+                                dest_path = os.path.join(DOWNLOADS_DIR, f"{base} ({counter}){ext}")
+                                counter += 1
+
+                            try:
+                                with open(dest_path, "wb") as f:
+                                    f.write(base64.b64decode(b64_str))
+                            except Exception as e:
+                                print(f"Error saving received file: {e}")
+                                dest_path = ""
+
+                            # Save to SQLite database scoped to receiver
+                            database.save_message(
+                                owner_user=self.current_user or "",
+                                sender=sender,
+                                recipient=recipient,
+                                text=text,
+                                timestamp=timestamp,
+                                msg_id=msg_id,
+                                msg_type="file",
+                                file_name=safe_name,
+                                file_size=file_size,
+                                file_path=dest_path
+                            )
+
+                            # Determine if belongs to active chat
+                            is_for_active_chat = False
+                            if recipient == "group" and self.active_chat == "group":
+                                is_for_active_chat = True
+                            elif recipient != "group":
+                                if self.active_chat.lower() == sender.lower():
+                                    is_for_active_chat = True
+
+                            if is_for_active_chat:
+                                self._render_file_bubble(
+                                    sender=sender,
+                                    text=text,
+                                    timestamp=timestamp,
+                                    is_sent=False,
+                                    file_name=safe_name,
+                                    file_size=file_size,
+                                    file_path=dest_path
+                                )
+                            else:
+                                key = "group" if recipient == "group" else sender
+                                self.unread_counts[key] = self.unread_counts.get(key, 0) + 1
+                                self._render_friends_list()
 
                 elif event_type == "user_list":
                     users, host_user = data

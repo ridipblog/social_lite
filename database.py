@@ -42,7 +42,7 @@ def init_db():
     )
     """)
 
-    # 2. Messages table for Group and 1-to-1 chats (with deduplication constraints)
+    # 2. Messages table for Group and 1-to-1 chats (with file sharing and deduplication constraints)
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS messages (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,6 +53,10 @@ def init_db():
         recipient TEXT NOT NULL,
         text TEXT NOT NULL,
         timestamp TEXT NOT NULL,
+        msg_type TEXT NOT NULL DEFAULT 'text',
+        file_name TEXT DEFAULT '',
+        file_size INTEGER DEFAULT 0,
+        file_path TEXT DEFAULT '',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
@@ -64,6 +68,14 @@ def init_db():
         cursor.execute("ALTER TABLE messages ADD COLUMN msg_id TEXT;")
     if "owner_user" not in existing_cols:
         cursor.execute("ALTER TABLE messages ADD COLUMN owner_user TEXT NOT NULL DEFAULT '';")
+    if "msg_type" not in existing_cols:
+        cursor.execute("ALTER TABLE messages ADD COLUMN msg_type TEXT NOT NULL DEFAULT 'text';")
+    if "file_name" not in existing_cols:
+        cursor.execute("ALTER TABLE messages ADD COLUMN file_name TEXT DEFAULT '';")
+    if "file_size" not in existing_cols:
+        cursor.execute("ALTER TABLE messages ADD COLUMN file_size INTEGER DEFAULT 0;")
+    if "file_path" not in existing_cols:
+        cursor.execute("ALTER TABLE messages ADD COLUMN file_path TEXT DEFAULT '';")
 
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_chat_owner ON messages(owner_user, chat_id);")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_unique ON messages(owner_user, msg_id);")
@@ -159,16 +171,19 @@ def get_canonical_chat_id(sender: str, recipient: str) -> str:
     return f"dm:{u1}:{u2}"
 
 
-def save_message(owner_user: str, sender: str, recipient: str, text: str, timestamp: str = None, msg_id: str = None) -> int:
+def save_message(owner_user: str, sender: str, recipient: str, text: str,
+                 timestamp: str = None, msg_id: str = None,
+                 msg_type: str = "text", file_name: str = "",
+                 file_size: int = 0, file_path: str = "") -> int:
     """
-    Save a chat message to the database, scoped to owner_user and deduplicated by msg_id.
+    Save a chat or file message to the database, scoped to owner_user and deduplicated by msg_id.
     Prevents duplicate message insertion.
     """
     if not timestamp:
         timestamp = datetime.now().strftime("%I:%M %p")
     if not msg_id:
         # Generate stable fallback ID if none provided
-        msg_id = f"{sender}_{recipient}_{text}_{timestamp}"
+        msg_id = f"{sender}_{recipient}_{text}_{file_name}_{timestamp}"
 
     owner = (owner_user or sender).strip()
     chat_id = get_canonical_chat_id(sender, recipient)
@@ -188,10 +203,10 @@ def save_message(owner_user: str, sender: str, recipient: str, text: str, timest
 
         cursor.execute(
             """
-            INSERT INTO messages (msg_id, owner_user, chat_id, sender, recipient, text, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO messages (msg_id, owner_user, chat_id, sender, recipient, text, timestamp, msg_type, file_name, file_size, file_path)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (msg_id, owner, chat_id, sender.strip(), recipient.strip(), text.strip(), timestamp)
+            (msg_id, owner, chat_id, sender.strip(), recipient.strip(), text.strip(), timestamp, msg_type, file_name, file_size, file_path)
         )
         conn.commit()
         return cursor.lastrowid
@@ -212,7 +227,7 @@ def get_chat_history(owner_user: str, user2_or_group: str, limit: int = 250) -> 
     try:
         cursor.execute(
             """
-            SELECT id, msg_id, sender, recipient, text, timestamp, created_at
+            SELECT id, msg_id, sender, recipient, text, timestamp, msg_type, file_name, file_size, file_path, created_at
             FROM messages
             WHERE (owner_user = ? OR owner_user = '') AND chat_id = ?
             ORDER BY id ASC
@@ -234,7 +249,11 @@ def get_chat_history(owner_user: str, user2_or_group: str, limit: int = 250) -> 
                     "sender": r["sender"],
                     "recipient": r["recipient"],
                     "text": r["text"],
-                    "timestamp": r["timestamp"]
+                    "timestamp": r["timestamp"],
+                    "msg_type": r["msg_type"] if "msg_type" in r.keys() else "text",
+                    "file_name": r["file_name"] if "file_name" in r.keys() else "",
+                    "file_size": r["file_size"] if "file_size" in r.keys() else 0,
+                    "file_path": r["file_path"] if "file_path" in r.keys() else ""
                 })
         return result
     except Exception as e:

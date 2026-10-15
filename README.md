@@ -30,11 +30,19 @@ A modern, high-performance desktop messaging application in Python. Features bui
      - Direct messages are routed exclusively to that friend.
      - Unread message counters (e.g. `(1)`) alert you when a friend sends you a private DM while you're in the group chat.
 
-3. **Persistent SQLite3 Message History**:
-   - Both Group chats and 1-to-1 conversations are automatically stored in `social_lite.db`.
-   - Switching between friends loads your full previous chat history instantly.
+3. **📎 File Sharing (Group & 1-to-1 DMs)**:
+   - Click the **📎 File** button next to the input box to attach any file (documents, images, videos, zip archives, audio, code).
+   - Preview banner shows filename and size before sending, with optional caption support.
+   - Files are automatically saved into the `downloads/` directory.
+   - Interactive file bubble cards display file extension icons, file sizes, a **📂 Open** button (opens directly), and a **💾 Save As...** button (to save anywhere on your computer).
+   - Works seamlessly in both **Group Chat** and **1-to-1 Direct Messages**.
 
-4. **Global Internet Connection (Pinggy Reverse Tunnel)**:
+4. **Persistent SQLite3 Message & File History**:
+   - Both Group chats and 1-to-1 conversations (texts and file attachments) are automatically stored in `social_lite.db`.
+   - Switching between friends loads your full previous chat history instantly.
+   - Offline past contacts are listed in the sidebar so you can review previous conversations and shared files anytime.
+
+5. **Global Internet Connection (Pinggy Reverse Tunnel)**:
    - Connect across different networks and cities (Assam <-> Delhi) with 1 click.
    - **Auto-fetch URL**: Enter your password in CMD, and SocialLite automatically grabs the `tcp://...` address, populates the input box, and copies it to your clipboard.
 
