@@ -122,6 +122,7 @@ class SocialLiteGUI:
         self.pending_file = None  # Selected file attachment: {"path": str, "name": str, "size": int}
         self.attach_btn = None
         self.file_preview_frame = None
+        self.message_widgets = {}  # {msg_id: bubble_row_frame} for live deletion
 
         # Networking & Tunnel Managers
         self.event_queue = queue.Queue()
@@ -767,6 +768,7 @@ class SocialLiteGUI:
         """Fetch message history from SQLite3 database and render in chat scroll frame."""
         for child in self.chat_scroll.winfo_children():
             child.destroy()
+        self.message_widgets.clear()
 
         if not self.current_user:
             return
@@ -795,14 +797,16 @@ class SocialLiteGUI:
                         is_sent=is_sent,
                         file_name=m.get("file_name", "file"),
                         file_size=m.get("file_size", 0),
-                        file_path=m.get("file_path", "")
+                        file_path=m.get("file_path", ""),
+                        msg_id=mid
                     )
                 else:
                     self._render_bubble(
                         sender="You" if is_sent else m["sender"],
                         text=m["text"],
                         timestamp=m["timestamp"],
-                        is_sent=is_sent
+                        is_sent=is_sent,
+                        msg_id=mid
                     )
 
     def _render_friends_list(self):
@@ -1176,7 +1180,7 @@ class SocialLiteGUI:
                     )
 
                     # 3. Render immediately on screen
-                    self._render_bubble(sender="You", text=text, timestamp=timestamp, is_sent=True)
+                    self._render_bubble(sender="You", text=text, timestamp=timestamp, is_sent=True, msg_id=msg_id)
                     self.msg_entry.delete(0, "end")
                 else:
                     messagebox.showwarning("Send Failed", "Message could not be delivered.")
@@ -1214,7 +1218,8 @@ class SocialLiteGUI:
             is_sent=True,
             file_name=file_name,
             file_size=file_size,
-            file_path=file_path
+            file_path=file_path,
+            msg_id=msg_id
         )
 
         # 4. Transmit over socket in background worker thread so GUI stays fluid
@@ -1243,16 +1248,24 @@ class SocialLiteGUI:
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _render_file_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, file_name: str, file_size: int, file_path: str):
+    def _render_file_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, file_name: str, file_size: int, file_path: str, msg_id: str = None):
         """Render modern file attachment card in active chat feed."""
         bubble_row = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         bubble_row.pack(fill="x", pady=5, padx=6)
+
+        if msg_id:
+            self.message_widgets[msg_id] = bubble_row
 
         bubble_color = COLOR_SENT if is_sent else COLOR_RECV
         align = "e" if is_sent else "w"
 
         bubble = ctk.CTkFrame(bubble_row, fg_color=bubble_color, corner_radius=14)
         bubble.pack(side="right" if is_sent else "left", anchor=align, padx=4)
+
+        if msg_id:
+            def _on_right_click(event, mid=msg_id, sent=is_sent):
+                self._prompt_delete_message(mid, sent)
+            bubble.bind("<Button-3>", _on_right_click)
 
         header_row = ctk.CTkFrame(bubble, fg_color="transparent")
         header_row.pack(anchor=align, padx=14, pady=(8, 2))
@@ -1267,6 +1280,21 @@ class SocialLiteGUI:
 
             time_lbl = ctk.CTkLabel(header_row, text=f"•  {timestamp}", font=ctk.CTkFont(size=10), text_color=COLOR_TEXT_MUTED)
             time_lbl.pack(side="left")
+
+        if msg_id:
+            del_btn = ctk.CTkButton(
+                header_row,
+                text="🗑️",
+                width=24,
+                height=20,
+                corner_radius=4,
+                fg_color="transparent",
+                hover_color="#1e3a8a" if is_sent else "#334155",
+                text_color="#94a3b8",
+                font=ctk.CTkFont(size=11),
+                command=lambda mid=msg_id, sent=is_sent: self._prompt_delete_message(mid, sent)
+            )
+            del_btn.pack(side="left" if is_sent else "right", padx=4)
 
         # Optional Caption Text
         if text:
@@ -1406,16 +1434,24 @@ class SocialLiteGUI:
             except Exception as e:
                 messagebox.showerror("Save Failed", f"Could not save file: {e}")
 
-    def _render_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool):
+    def _render_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, msg_id: str = None):
         """Render modern message card in active chat feed."""
         bubble_row = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         bubble_row.pack(fill="x", pady=4, padx=6)
+
+        if msg_id:
+            self.message_widgets[msg_id] = bubble_row
 
         bubble_color = COLOR_SENT if is_sent else COLOR_RECV
         align = "e" if is_sent else "w"
 
         bubble = ctk.CTkFrame(bubble_row, fg_color=bubble_color, corner_radius=14)
         bubble.pack(side="right" if is_sent else "left", anchor=align, padx=4)
+
+        if msg_id:
+            def _on_right_click(event, mid=msg_id, sent=is_sent):
+                self._prompt_delete_message(mid, sent)
+            bubble.bind("<Button-3>", _on_right_click)
 
         header_row = ctk.CTkFrame(bubble, fg_color="transparent")
         header_row.pack(anchor=align, padx=14, pady=(8, 2))
@@ -1430,6 +1466,21 @@ class SocialLiteGUI:
 
             time_lbl = ctk.CTkLabel(header_row, text=f"•  {timestamp}", font=ctk.CTkFont(size=10), text_color=COLOR_TEXT_MUTED)
             time_lbl.pack(side="left")
+
+        if msg_id:
+            del_btn = ctk.CTkButton(
+                header_row,
+                text="🗑️",
+                width=24,
+                height=20,
+                corner_radius=4,
+                fg_color="transparent",
+                hover_color="#1e3a8a" if is_sent else "#334155",
+                text_color="#94a3b8",
+                font=ctk.CTkFont(size=11),
+                command=lambda mid=msg_id, sent=is_sent: self._prompt_delete_message(mid, sent)
+            )
+            del_btn.pack(side="left" if is_sent else "right", padx=4)
 
         body_lbl = ctk.CTkLabel(
             bubble,
@@ -1469,6 +1520,108 @@ class SocialLiteGUI:
             self.chat_scroll._parent_canvas.yview_moveto(1.0)
         except Exception:
             pass
+
+    def _prompt_delete_message(self, msg_id: str, is_sent: bool):
+        """Show clean dialog offering 'Delete for Me' and optionally 'Delete for Everyone'."""
+        if not msg_id:
+            return
+
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title("Delete Message")
+        dialog.geometry("380x210")
+        dialog.resizable(False, False)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() // 2) - 190
+        y = self.root.winfo_y() + (self.root.winfo_height() // 2) - 105
+        dialog.geometry(f"+{x}+{y}")
+
+        title_lbl = ctk.CTkLabel(
+            dialog,
+            text="Delete Message?",
+            font=ctk.CTkFont(size=16, weight="bold")
+        )
+        title_lbl.pack(pady=(16, 6))
+
+        info_text = "Would you like to delete this message?" if is_sent else "You can delete this message for yourself."
+        info_lbl = ctk.CTkLabel(
+            dialog,
+            text=info_text,
+            font=ctk.CTkFont(size=12),
+            text_color=COLOR_TEXT_MUTED
+        )
+        info_lbl.pack(pady=(0, 14))
+
+        btn_box = ctk.CTkFrame(dialog, fg_color="transparent")
+        btn_box.pack(fill="x", padx=24)
+
+        def _do_for_me():
+            dialog.destroy()
+            self._delete_for_me(msg_id)
+
+        del_me_btn = ctk.CTkButton(
+            btn_box,
+            text="Delete for Me",
+            fg_color="#475569",
+            hover_color="#334155",
+            command=_do_for_me
+        )
+        del_me_btn.pack(fill="x", pady=4)
+
+        if is_sent:
+            def _do_for_everyone():
+                dialog.destroy()
+                self._delete_for_everyone(msg_id)
+
+            del_everyone_btn = ctk.CTkButton(
+                btn_box,
+                text="Delete for Everyone",
+                fg_color=COLOR_RED,
+                hover_color="#dc2626",
+                command=_do_for_everyone
+            )
+            del_everyone_btn.pack(fill="x", pady=4)
+
+        cancel_btn = ctk.CTkButton(
+            btn_box,
+            text="Cancel",
+            fg_color="transparent",
+            hover_color="#1e293b",
+            text_color=COLOR_TEXT_MUTED,
+            command=dialog.destroy
+        )
+        cancel_btn.pack(fill="x", pady=4)
+
+    def _delete_for_me(self, msg_id: str):
+        """Delete message locally for current user only."""
+        if not self.current_user or not msg_id:
+            return
+        database.delete_message_for_me(self.current_user, msg_id)
+        widget = self.message_widgets.pop(msg_id, None)
+        if widget and widget.winfo_exists():
+            widget.destroy()
+
+    def _delete_for_everyone(self, msg_id: str):
+        """Delete message for current user and broadcast deletion to all peers."""
+        if not msg_id:
+            return
+
+        # 1. Delete locally from DB and UI
+        database.delete_message_for_everyone(msg_id)
+        widget = self.message_widgets.pop(msg_id, None)
+        if widget and widget.winfo_exists():
+            widget.destroy()
+
+        # 2. Broadcast delete packet over network
+        payload = {
+            "type": "delete_message",
+            "msg_id": msg_id,
+            "sender": self.current_user,
+            "recipient": self.active_chat
+        }
+        self.network.send_message(payload)
 
     # =========================================================================
     # Thread Callbacks (Push to thread-safe queue)
@@ -1535,7 +1688,7 @@ class SocialLiteGUI:
                                     is_for_active_chat = True
 
                             if is_for_active_chat:
-                                self._render_bubble(sender=sender, text=text, timestamp=timestamp, is_sent=False)
+                                self._render_bubble(sender=sender, text=text, timestamp=timestamp, is_sent=False, msg_id=msg_id)
                             else:
                                 # Increment unread counter and update sidebar
                                 key = "group" if recipient == "group" else sender
@@ -1622,12 +1775,21 @@ class SocialLiteGUI:
                                     is_sent=False,
                                     file_name=safe_name,
                                     file_size=file_size,
-                                    file_path=dest_path
+                                    file_path=dest_path,
+                                    msg_id=msg_id
                                 )
                             else:
                                 key = "group" if recipient == "group" else sender
                                 self.unread_counts[key] = self.unread_counts.get(key, 0) + 1
                                 self._render_friends_list()
+
+                        elif m_type == "delete_message":
+                            del_msg_id = data.get("msg_id")
+                            if del_msg_id:
+                                database.delete_message_for_everyone(del_msg_id)
+                                widget = self.message_widgets.pop(del_msg_id, None)
+                                if widget and widget.winfo_exists():
+                                    widget.destroy()
 
                 elif event_type == "user_list":
                     users, host_user = data

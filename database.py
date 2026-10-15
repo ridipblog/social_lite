@@ -302,5 +302,50 @@ def get_recent_contacts(owner_user: str) -> list[str]:
         conn.close()
 
 
+def delete_message_for_me(owner_user: str, msg_id: str) -> bool:
+    """Delete a message from owner_user's view only."""
+    owner = (owner_user or "").strip()
+    mid = (msg_id or "").strip()
+    if not owner or not mid:
+        return False
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "DELETE FROM messages WHERE owner_user = ? AND msg_id = ?",
+            (owner, mid)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"[DB Error] Failed to delete message for me: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def delete_message_for_everyone(msg_id: str) -> bool:
+    """Delete a message globally from all participants across the database."""
+    mid = (msg_id or "").strip()
+    if not mid:
+        return False
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "DELETE FROM messages WHERE msg_id = ?",
+            (mid,)
+        )
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        print(f"[DB Error] Failed to delete message for everyone: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 # Automatically initialize tables on import
 init_db()
