@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime
 
 DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "social_lite.db")
+DOWNLOADS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "downloads")
 
 
 def get_connection():
@@ -325,8 +326,30 @@ def delete_message_for_me(owner_user: str, msg_id: str) -> bool:
         conn.close()
 
 
-def delete_message_for_everyone(msg_id: str) -> bool:
-    """Delete a message globally from all participants across the database."""
+def get_message_by_id(msg_id: str) -> dict | None:
+    """Fetch details of a single message by msg_id."""
+    mid = (msg_id or "").strip()
+    if not mid:
+        return None
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT * FROM messages WHERE msg_id = ? LIMIT 1", (mid,))
+        row = cursor.fetchone()
+        return dict(row) if row else None
+    except Exception as e:
+        print(f"[DB Error] Failed to fetch message {msg_id}: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def delete_message_for_everyone(msg_id: str, delete_physical_file: bool = True) -> bool:
+    """Delete a message globally from all participants across the database.
+    If delete_physical_file is True and the message is a file located in the downloads/ folder,
+    the physical file is also safely deleted from disk if no other message references it.
+    """
     mid = (msg_id or "").strip()
     if not mid:
         return False
@@ -334,12 +357,44 @@ def delete_message_for_everyone(msg_id: str) -> bool:
     conn = get_connection()
     cursor = conn.cursor()
     try:
+        # 1. Fetch file paths for this msg_id before deletion
+        cursor.execute(
+            "SELECT msg_type, file_path, file_name FROM messages WHERE msg_id = ?",
+            (mid,)
+        )
+        file_rows = cursor.fetchall()
+
+        # 2. Delete database records
         cursor.execute(
             "DELETE FROM messages WHERE msg_id = ?",
             (mid,)
         )
+        deleted_count = cursor.rowcount
         conn.commit()
-        return cursor.rowcount > 0
+
+        # 3. Clean up physical file in downloads/ folder if requested
+        if delete_physical_file and file_rows:
+            downloads_dir = os.path.normcase(os.path.realpath(DOWNLOADS_DIR))
+            for row in file_rows:
+                fpath = (row["file_path"] or "").strip()
+                if fpath and os.path.exists(fpath):
+                    fpath_norm = os.path.normcase(os.path.realpath(fpath))
+                    # Only delete if it resides inside downloads/ folder (e.g. on receiver's PC)
+                    if fpath_norm.startswith(downloads_dir):
+                        # Ensure no remaining messages reference this exact file_path
+                        cursor.execute(
+                            "SELECT COUNT(*) as count FROM messages WHERE file_path = ?",
+                            (fpath,)
+                        )
+                        remaining = cursor.fetchone()["count"]
+                        if remaining == 0:
+                            try:
+                                os.remove(fpath)
+                                print(f"[File Cleanup] Physically removed received file: {fpath}")
+                            except Exception as fe:
+                                print(f"[File Cleanup Error] Could not remove {fpath}: {fe}")
+
+        return deleted_count > 0
     except Exception as e:
         print(f"[DB Error] Failed to delete message for everyone: {e}")
         return False
@@ -349,3 +404,4 @@ def delete_message_for_everyone(msg_id: str) -> bool:
 
 # Automatically initialize tables on import
 init_db()
+

@@ -41,7 +41,7 @@ A modern, high-performance desktop messaging application in Python. Features bui
    - Available on **every message and file attachment** in both Group chat and 1-to-1 Direct Messages.
    - Click the **🗑️** icon on any message bubble, or **right-click** the message card, to open the deletion menu:
      - **Delete for Me**: Permanently deletes the message or file record only from your local view and your private SQLite database record. Other users keep their copies intact.
-     - **Delete for Everyone**: (Available for messages you sent) Deletes the message locally and broadcasts a real-time deletion signal across the network, automatically wiping the message from all recipients' screens and databases.
+     - **Delete for Everyone**: (Available for messages you sent) Deletes the message locally and broadcasts a real-time deletion signal across the network, automatically wiping the message from all recipients' screens and databases, **and physically deleting the downloaded file from social_lite/downloads/ on recipients' PCs**.
 
 5. **Persistent SQLite3 Message & File History**:
    - Both Group chats and 1-to-1 conversations (texts and file attachments) are automatically stored in `social_lite.db`.
