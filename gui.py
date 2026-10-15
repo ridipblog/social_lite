@@ -799,6 +799,12 @@ class SocialLiteGUI:
         self.message_widgets.clear()
         self.message_ticks.clear()
 
+        # Reset canvas scroll to top before adding new conversation items
+        try:
+            self.chat_scroll._parent_canvas.yview_moveto(0.0)
+        except Exception:
+            pass
+
         if not self.current_user:
             return
 
@@ -807,9 +813,9 @@ class SocialLiteGUI:
 
         if not messages:
             if self.active_chat == "group":
-                self._add_system_message("This is the beginning of the # General group chat.")
+                self._add_system_message("This is the beginning of the # General group chat.", auto_scroll=False)
             else:
-                self._add_system_message(f"This is the beginning of your direct message history with {self.active_chat}.")
+                self._add_system_message(f"This is the beginning of your direct message history with {self.active_chat}.", auto_scroll=False)
         else:
             for m in messages:
                 mid = m.get("msg_id")
@@ -829,7 +835,8 @@ class SocialLiteGUI:
                         file_size=m.get("file_size", 0),
                         file_path=m.get("file_path", ""),
                         msg_id=mid,
-                        status=m_status
+                        status=m_status,
+                        auto_scroll=False
                     )
                 else:
                     self._render_bubble(
@@ -838,8 +845,12 @@ class SocialLiteGUI:
                         timestamp=m["timestamp"],
                         is_sent=is_sent,
                         msg_id=mid,
-                        status=m_status
+                        status=m_status,
+                        auto_scroll=False
                     )
+
+        # After rendering all messages, calculate scroll once cleanly
+        self._scroll_chat_to_bottom()
 
     def _render_friends_list(self):
         """Update the Direct Messages sidebar list with all online friends and past contacts."""
@@ -1280,7 +1291,7 @@ class SocialLiteGUI:
 
         threading.Thread(target=_worker, daemon=True).start()
 
-    def _render_file_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, file_name: str, file_size: int, file_path: str, msg_id: str = None, status: str = "sent"):
+    def _render_file_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, file_name: str, file_size: int, file_path: str, msg_id: str = None, status: str = "sent", auto_scroll: bool = True):
         """Render modern file attachment card in active chat feed."""
         bubble_row = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         bubble_row.pack(fill="x", pady=5, padx=6)
@@ -1418,12 +1429,9 @@ class SocialLiteGUI:
         )
         save_btn.pack(side="left")
 
-        # Auto-scroll to bottom
-        self.root.update_idletasks()
-        try:
-            self.chat_scroll._parent_canvas.yview_moveto(1.0)
-        except Exception:
-            pass
+        # Auto-scroll to bottom if requested
+        if auto_scroll:
+            self._scroll_chat_to_bottom()
 
     def _open_file(self, file_path: str):
         """Open the file with default system application or reveal in folder."""
@@ -1477,7 +1485,7 @@ class SocialLiteGUI:
             except Exception as e:
                 messagebox.showerror("Save Failed", f"Could not save file: {e}")
 
-    def _render_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, msg_id: str = None, status: str = "sent"):
+    def _render_bubble(self, sender: str, text: str, timestamp: str, is_sent: bool, msg_id: str = None, status: str = "sent", auto_scroll: bool = True):
         """Render modern message card in active chat feed."""
         bubble_row = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         bubble_row.pack(fill="x", pady=4, padx=6)
@@ -1546,12 +1554,9 @@ class SocialLiteGUI:
         )
         body_lbl.pack(anchor=align, padx=14, pady=(0, 8))
 
-        # Auto-scroll to bottom
-        self.root.update_idletasks()
-        try:
-            self.chat_scroll._parent_canvas.yview_moveto(1.0)
-        except Exception:
-            pass
+        # Auto-scroll to bottom if requested
+        if auto_scroll:
+            self._scroll_chat_to_bottom()
 
     def _update_tick_ui(self, msg_id: str, new_status: str):
         """Dynamically update tick icon and color for a message in the active chat view."""
@@ -1560,7 +1565,7 @@ class SocialLiteGUI:
             tick_text, tick_color = get_tick_display(new_status)
             tick_lbl.configure(text=tick_text, text_color=tick_color)
 
-    def _add_system_message(self, text: str):
+    def _add_system_message(self, text: str, auto_scroll: bool = True):
         """Render centered system notification pill in feed."""
         sys_row = ctk.CTkFrame(self.chat_scroll, fg_color="transparent")
         sys_row.pack(fill="x", pady=6)
@@ -1576,11 +1581,34 @@ class SocialLiteGUI:
         )
         lbl.pack(padx=16, pady=4)
 
+        if auto_scroll:
+            self._scroll_chat_to_bottom()
+
+    def _scroll_chat_to_bottom(self):
+        """Safely scroll chat view to the bottom if content overflows viewport, or keep at top."""
         self.root.update_idletasks()
         try:
-            self.chat_scroll._parent_canvas.yview_moveto(1.0)
+            canvas = self.chat_scroll._parent_canvas
+            bbox = canvas.bbox("all")
+            if bbox:
+                canvas.configure(scrollregion=bbox)
+                content_height = bbox[3] - bbox[1]
+                viewport_height = canvas.winfo_height()
+                if viewport_height > 1 and content_height <= viewport_height:
+                    canvas.yview_moveto(0.0)
+                else:
+                    y1, y2 = canvas.yview()
+                    if y1 <= 0.0 and y2 >= 1.0:
+                        canvas.yview_moveto(0.0)
+                    else:
+                        canvas.yview_moveto(1.0)
+            else:
+                canvas.yview_moveto(0.0)
         except Exception:
-            pass
+            try:
+                self.chat_scroll._parent_canvas.yview_moveto(1.0)
+            except Exception:
+                pass
 
     def _prompt_delete_message(self, msg_id: str, is_sent: bool):
         """Show clean dialog offering 'Delete for Me' and optionally 'Delete for Everyone'."""
