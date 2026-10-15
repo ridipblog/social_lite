@@ -1189,18 +1189,10 @@ class SocialLiteGUI:
         file_name = file_info["name"]
         file_size = file_info["size"]
 
-        # Ensure a copy exists in DOWNLOADS_DIR
-        local_dest = os.path.join(DOWNLOADS_DIR, file_name)
-        if os.path.abspath(file_path) != os.path.abspath(local_dest):
-            try:
-                shutil.copy2(file_path, local_dest)
-            except Exception:
-                local_dest = file_path
-
         # 1. Register msg_id
         self.seen_msg_ids.add(msg_id)
 
-        # 2. Save to database scoped to sender
+        # 2. Save to database scoped to sender (pointing to sender's original file)
         database.save_message(
             owner_user=sender,
             sender=sender,
@@ -1211,7 +1203,7 @@ class SocialLiteGUI:
             msg_type="file",
             file_name=file_name,
             file_size=file_size,
-            file_path=local_dest
+            file_path=file_path
         )
 
         # 3. Render file bubble immediately on sender's feed
@@ -1222,7 +1214,7 @@ class SocialLiteGUI:
             is_sent=True,
             file_name=file_name,
             file_size=file_size,
-            file_path=local_dest
+            file_path=file_path
         )
 
         # 4. Transmit over socket in background worker thread so GUI stays fluid
@@ -1364,23 +1356,42 @@ class SocialLiteGUI:
 
     def _open_file(self, file_path: str):
         """Open the file with default system application or reveal in folder."""
-        if not file_path or not os.path.exists(file_path):
-            messagebox.showinfo("File Not Found", "The file was not found on this computer.")
-            return
+        target = file_path
+        if not target or not os.path.exists(target):
+            if target:
+                fallback = os.path.join(DOWNLOADS_DIR, os.path.basename(target))
+                if os.path.exists(fallback):
+                    target = fallback
+                else:
+                    messagebox.showinfo("File Not Found", "The file was not found on this computer.")
+                    return
+            else:
+                messagebox.showinfo("File Not Found", "The file was not found on this computer.")
+                return
+
         try:
-            os.startfile(file_path)
+            os.startfile(target)
         except Exception:
             try:
                 import subprocess
-                subprocess.Popen(["explorer", "/select,", os.path.normpath(file_path)])
+                subprocess.Popen(["explorer", "/select,", os.path.normpath(target)])
             except Exception as e:
                 messagebox.showerror("Open Error", f"Could not open file: {e}")
 
     def _save_file_as(self, file_path: str, default_name: str):
         """Prompt user to save a copy of the file anywhere on their computer."""
-        if not file_path or not os.path.exists(file_path):
-            messagebox.showinfo("File Not Found", "The original file is not available to copy.")
-            return
+        target = file_path
+        if not target or not os.path.exists(target):
+            if target:
+                fallback = os.path.join(DOWNLOADS_DIR, os.path.basename(target))
+                if os.path.exists(fallback):
+                    target = fallback
+                else:
+                    messagebox.showinfo("File Not Found", "The original file is not available to copy.")
+                    return
+            else:
+                messagebox.showinfo("File Not Found", "The original file is not available to copy.")
+                return
 
         ext = os.path.splitext(default_name)[1]
         save_target = filedialog.asksaveasfilename(
@@ -1390,7 +1401,7 @@ class SocialLiteGUI:
         )
         if save_target:
             try:
-                shutil.copy2(file_path, save_target)
+                shutil.copy2(target, save_target)
                 messagebox.showinfo("Saved Successfully", f"File saved to:\n{save_target}")
             except Exception as e:
                 messagebox.showerror("Save Failed", f"Could not save file: {e}")
@@ -1545,18 +1556,38 @@ class SocialLiteGUI:
                                 continue
                             self.seen_msg_ids.add(msg_id)
 
-                            # Save incoming file bytes into DOWNLOADS_DIR
+                            # Decode incoming file bytes
+                            try:
+                                file_bytes = base64.b64decode(b64_str)
+                            except Exception:
+                                file_bytes = b""
+
                             safe_name = os.path.basename(filename) or "received_file"
                             dest_path = os.path.join(DOWNLOADS_DIR, safe_name)
-                            base, ext = os.path.splitext(safe_name)
-                            counter = 1
-                            while os.path.exists(dest_path):
-                                dest_path = os.path.join(DOWNLOADS_DIR, f"{base} ({counter}){ext}")
-                                counter += 1
+
+                            # If a file with the same name exists, check if it has identical content
+                            is_identical = False
+                            if os.path.exists(dest_path):
+                                try:
+                                    if os.path.getsize(dest_path) == len(file_bytes):
+                                        with open(dest_path, "rb") as ef:
+                                            existing_hash = hashlib.md5(ef.read()).hexdigest()
+                                        if existing_hash == hashlib.md5(file_bytes).hexdigest():
+                                            is_identical = True
+                                except Exception:
+                                    is_identical = False
+
+                                if not is_identical:
+                                    base, ext = os.path.splitext(safe_name)
+                                    counter = 1
+                                    while os.path.exists(dest_path):
+                                        dest_path = os.path.join(DOWNLOADS_DIR, f"{base} ({counter}){ext}")
+                                        counter += 1
 
                             try:
-                                with open(dest_path, "wb") as f:
-                                    f.write(base64.b64decode(b64_str))
+                                if not is_identical:
+                                    with open(dest_path, "wb") as f:
+                                        f.write(file_bytes)
                             except Exception as e:
                                 print(f"Error saving received file: {e}")
                                 dest_path = ""
